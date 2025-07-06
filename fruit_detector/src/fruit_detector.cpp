@@ -99,7 +99,7 @@ void FruitDetector::imageCallback(
           target_detection = detection;
           target_x_offset = x_offset;
           target_y_offset = y_offset;
-          target_class_id = detection[0].x;
+          target_class_id = (int)detection[0].x;
         }
       }
 
@@ -119,7 +119,7 @@ void FruitDetector::imageCallback(
       geometry_msgs::msg::Point offset_msg;
       offset_msg.x = target_x_offset;
       offset_msg.y = target_y_offset;
-      offset_msg.z = 0.0;  // Z轴不使用，设为0
+      offset_msg.z = target_class_id;
       target_offset_publisher_->publish(offset_msg);
     }
     
@@ -143,8 +143,6 @@ void FruitDetector::imageCallback(
     if (!frame.empty()) {
       auto image_msg = detection_image.toImageMsg();
       image_publisher_->publish(*image_msg);
-      RCLCPP_DEBUG(this->get_logger(), "已发布检测结果图像，尺寸: %dx%d",
-                   frame.cols, frame.rows);
     } else {
       RCLCPP_WARN(this->get_logger(), "检测结果图像为空，无法发布");
     }

@@ -115,9 +115,6 @@ void Inference::PostProcessing(cv::Mat &frame) {
     const float* detections = inference_request_.get_output_tensor().data<const float>();
     cv::Mat detection_outputs(model_output_shape_, CV_32F, (float*)detections);
 
-    std::cout<<detection_outputs.cols<<std::endl;
-    std::cout<<detection_outputs.rows<<std::endl;
-
     // 遍历所有检测结果
     for (int i = 0; i < detection_outputs.cols; ++i) {
         // 提取类别概率

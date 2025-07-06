@@ -1,6 +1,7 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, RegisterEventHandler, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.event_handlers import OnProcessStart
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -8,6 +9,8 @@ def generate_launch_description():
     # Get package share directories
     usb_camera_pkg_dir = get_package_share_directory('usb_camera')
     fruit_detector_pkg_dir = get_package_share_directory('fruit_detector')
+    arm_moveit_pkg_dir = get_package_share_directory('arm_moveit')
+    arm_control_pkg_dir = get_package_share_directory('arm_control')
     
     # Include USB camera launch file
     usb_camera_launch = IncludeLaunchDescription(
@@ -27,7 +30,29 @@ def generate_launch_description():
         }.items()
     )
     
+    # Include MoveIt demo launch
+    moveit_demo_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(arm_moveit_pkg_dir, 'launch', 'demo.launch.py')
+        )
+    )
+    
+    # Include arm_control launch file with delay
+    arm_control_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(arm_control_pkg_dir, 'launch', 'arm_control.launch.py')
+        )
+    )
+    
+    # Delay arm_control node launch to ensure MoveIt is fully started
+    delayed_arm_control = TimerAction(
+        period=5.0,  # 5 second delay
+        actions=[arm_control_launch]
+    )
+    
     return LaunchDescription([
         usb_camera_launch,
-        fruit_detector_launch
+        fruit_detector_launch,
+        moveit_demo_launch,
+        delayed_arm_control
     ]) 
