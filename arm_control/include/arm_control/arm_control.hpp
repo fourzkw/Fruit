@@ -5,6 +5,7 @@
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -12,6 +13,9 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <thread>
+#include <moveit/robot_model/robot_model.h>
+#include <moveit/robot_state/robot_state.h>
 
 namespace arm_control
 {
@@ -63,6 +67,8 @@ private:
 
   // MoveIt related members
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
+  moveit::core::RobotStatePtr robot_state_;
+  const moveit::core::JointModelGroup* joint_model_group_;
   
   // Subscribers and publishers
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
@@ -87,6 +93,10 @@ private:
   
   // Current state
   ArmState current_state_;
+
+  // Current pose
+  geometry_msgs::msg::Pose current_pose_;
+  std::mutex current_pose_mutex_;
   
   // Timers
   rclcpp::TimerBase::SharedPtr timer_;
