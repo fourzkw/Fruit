@@ -122,6 +122,15 @@ void FruitDetector::imageCallback(
       offset_msg.z = target_class_id;
       target_offset_publisher_->publish(offset_msg);
     }
+    else
+    {
+      // 发布目标偏移量
+      geometry_msgs::msg::Point offset_msg;
+      offset_msg.x = -10000;
+      offset_msg.y = -10000;
+      offset_msg.z = -1;
+      target_offset_publisher_->publish(offset_msg);
+    }
     
     // 添加FPS显示
     char fps_text[50];

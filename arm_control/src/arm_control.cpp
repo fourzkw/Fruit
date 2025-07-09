@@ -8,6 +8,12 @@ ArmControlNode::ArmControlNode()
       loop_rate_(5), // 状态机频率
       target_detected_(false), target_x_offset_(0.0f), target_y_offset_(0.0f),
       target_class_id_(0), serial_data_(9, 0.0f), idle_timer_(nullptr) {
+  // 初始化机械爪为打开状态
+  {
+    std::lock_guard<std::mutex> lock(gripper_state_mutex_);
+    gripper_state_ = 0.0f;
+  }
+  
   // 声明参数
   this->declare_parameter("loop_rate", loop_rate_);
 
@@ -263,17 +269,27 @@ void ArmControlNode::publishServoAnglesCallback() {
       return;
     }
 
-    // 将关节角度数据复制到Float32MultiArray消息
-    servo_angles.data.resize(latest_joint_positions_.size());
+    // 将关节角度数据复制到Float32MultiArray消息，并增加一个元素用于机械爪状态
+    servo_angles.data.resize(latest_joint_positions_.size() + 1);
     for (size_t i = 0; i < latest_joint_positions_.size(); ++i) {
       servo_angles.data[i] = static_cast<float>(latest_joint_positions_[i]);
     }
+    
+    // 线程安全地读取机械爪状态
+    float current_gripper_state;
+    {
+      std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
+      current_gripper_state = gripper_state_;
+    }
+    
+    // 添加机械爪状态作为最后一个元素
+    servo_angles.data[latest_joint_positions_.size()] = current_gripper_state;
   }
 
   // 发布伺服角度消息
   servo_angle_pub_->publish(servo_angles);
 
-  RCLCPP_DEBUG(this->get_logger(), "Published %zu joint angles to /servo_angle",
+  RCLCPP_DEBUG(this->get_logger(), "Published %zu joint angles and gripper state to /servo_angle",
                servo_angles.data.size());
 }
 
@@ -337,15 +353,96 @@ void ArmControlNode::handleIdleState() {
 void ArmControlNode::handleLeftGroundGrabbing() {
   float current_x_offset = 0.0f;
   float current_y_offset = 0.0f;
-  // 线程安全地访问目标偏移变量
+
+  // 获取目标偏移量
   {
     std::lock_guard<std::mutex> lock(target_offset_mutex_);
     current_x_offset = target_x_offset_;
     current_y_offset = target_y_offset_;
   }
 
-  // 这里可以基于current_pose和offset实现抓取逻辑
+  int count = 0;
+  while (current_x_offset == -10000 && current_y_offset == -10000) {
+    RCLCPP_INFO(this->get_logger(), "未检测到目标");
+    count++;
+    if (count > 10) {
+      transitionToIdle();
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // 第一步：调整joint1角度，基于current_x_offset
+  RCLCPP_INFO(this->get_logger(), "开始调整joint1角度...");
   while (1) {
+    // 线程安全地访问目标偏移变量
+    {
+      std::lock_guard<std::mutex> lock(target_offset_mutex_);
+      current_x_offset = target_x_offset_;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "当前X轴偏移: %.2f", current_x_offset);
+
+    // 如果X轴偏移足够小，跳出循环
+    if (abs(current_x_offset) < 15) {
+      RCLCPP_INFO(this->get_logger(), "X轴偏移调整完成");
+      break;
+    }
+
+    // 计算joint1角度调整量
+    float adjust_joint1_angle = current_x_offset * 0.002;
+
+    // 获取当前关节角度
+    std::vector<double> joint_values;
+    {
+      std::lock_guard<std::mutex> lock(joint_positions_mutex_);
+      joint_values = latest_joint_positions_;
+    }
+
+    // 确保有足够的关节数据
+    if (joint_values.size() >= 1) {
+      // 计算joint1的新角度
+      joint_values[0] += adjust_joint1_angle;
+
+      // 设置新的关节角度
+      move_group_->setJointValueTarget(joint_values);
+
+      // 规划并执行
+      moveit::planning_interface::MoveGroupInterface::Plan joint_plan;
+      bool joint_success = static_cast<bool>(move_group_->plan(joint_plan));
+
+      if (joint_success) {
+        RCLCPP_INFO(this->get_logger(), "执行joint1角度调整...");
+        move_group_->execute(joint_plan);
+      } else {
+        RCLCPP_ERROR(this->get_logger(), "joint1角度调整规划失败");
+      }
+    }
+
+    // 控制循环频率
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
+  // 第二步：调整末端执行器位置，基于current_y_offset
+  RCLCPP_INFO(this->get_logger(), "开始调整末端执行器位置...");
+  while (1) {
+    // 线程安全地访问目标偏移变量
+    {
+      std::lock_guard<std::mutex> lock(target_offset_mutex_);
+      current_y_offset = target_y_offset_;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "当前Y轴偏移: %.2f", current_y_offset);
+
+    // 如果Y轴偏移足够小，跳出循环
+    if (abs(current_y_offset) < 15) {
+      RCLCPP_INFO(this->get_logger(), "Y轴偏移调整完成");
+      break;
+    }
+
+    // 计算末端执行器Y轴调整量
+    float adjust_eef_yposition = -current_y_offset * 0.0002;
+
     // 获取当前位姿
     geometry_msgs::msg::Pose current_pose;
     {
@@ -365,8 +462,8 @@ void ArmControlNode::handleLeftGroundGrabbing() {
         current_pose.orientation.y, current_pose.orientation.z);
     Eigen::Matrix3d rotation_matrix = rotation.toRotationMatrix();
 
-    // 在末端执行器自身坐标系的Y轴方向上移动0.01米
-    Eigen::Vector3d y_axis_displacement(0.0, 0.01, 0.0);
+    // 在末端执行器自身坐标系的Y轴方向上移动adjust_eef_yposition米
+    Eigen::Vector3d y_axis_displacement(0.0, adjust_eef_yposition, 0.0);
 
     // 将位移转换到世界坐标系
     Eigen::Vector3d world_displacement = rotation_matrix * y_axis_displacement;
@@ -377,78 +474,91 @@ void ArmControlNode::handleLeftGroundGrabbing() {
     target_pose.position.y += world_displacement.y();
     target_pose.position.z += world_displacement.z();
 
-         RCLCPP_INFO(
-         this->get_logger(), "目标末端执行器位置: x=%.4f, y=%.4f, z=%.4f",
-         target_pose.position.x, target_pose.position.y, target_pose.position.z);
+    RCLCPP_INFO(
+        this->get_logger(), "目标末端执行器位置: x=%.4f, y=%.4f, z=%.4f",
+        target_pose.position.x, target_pose.position.y, target_pose.position.z);
 
-     // 创建一个笛卡尔路径的路点列表
-     std::vector<geometry_msgs::msg::Pose> waypoints;
-     
-     // 生成中间路点以创建更平滑的路径
-     // 当前位置到目标位置的距离分为5个路点
-     int num_waypoints = 5;
-     for (int i = 1; i <= num_waypoints; i++) {
-         geometry_msgs::msg::Pose waypoint = current_pose;
-         double fraction = static_cast<double>(i) / num_waypoints;
-         
-         // 线性插值当前位置和目标位置之间的路点
-         waypoint.position.x = current_pose.position.x + 
-                              fraction * (target_pose.position.x - current_pose.position.x);
-         waypoint.position.y = current_pose.position.y + 
-                              fraction * (target_pose.position.y - current_pose.position.y);
-         waypoint.position.z = current_pose.position.z + 
-                              fraction * (target_pose.position.z - current_pose.position.z);
-                              
-         // 保持相同的方向
-         waypoint.orientation = current_pose.orientation;
-         
-         // 添加路点
-         waypoints.push_back(waypoint);
-     }
+    // 创建一个笛卡尔路径的路点列表
+    std::vector<geometry_msgs::msg::Pose> waypoints;
 
-     // 设置笛卡尔路径的参数
-     double eef_step = 0.01;  // 末端执行器的最大步长(米)
-     double jump_threshold = 0.0;  // 禁用跳跃检测
+    // 生成中间路点以创建更平滑的路径
+    // 当前位置到目标位置的距离分为5个路点
+    int num_waypoints = 5;
+    for (int i = 1; i <= num_waypoints; i++) {
+      geometry_msgs::msg::Pose waypoint = current_pose;
+      double fraction = static_cast<double>(i) / num_waypoints;
 
-     // 计算笛卡尔路径
-     moveit_msgs::msg::RobotTrajectory trajectory;
-     double fraction = move_group_->computeCartesianPath(
-         waypoints,    // 路点
-         eef_step,     // 末端步长
-         jump_threshold,  // 跳跃阈值
-         trajectory    // 输出轨迹
-     );
+      // 线性插值当前位置和目标位置之间的路点
+      waypoint.position.x =
+          current_pose.position.x +
+          fraction * (target_pose.position.x - current_pose.position.x);
+      waypoint.position.y =
+          current_pose.position.y +
+          fraction * (target_pose.position.y - current_pose.position.y);
+      waypoint.position.z =
+          current_pose.position.z +
+          fraction * (target_pose.position.z - current_pose.position.z);
 
-     RCLCPP_INFO(this->get_logger(), "笛卡尔路径规划完成度: %.2f%%", fraction * 100.0);
-     
-     // 创建一个计划对象
-     moveit::planning_interface::MoveGroupInterface::Plan plan;
-     plan.trajectory_ = trajectory;
-     
-     // 如果路径规划至少50%成功，执行移动
-     bool success = (fraction > 0.5);
+      // 保持相同的方向
+      waypoint.orientation = current_pose.orientation;
 
-         if (success) {
-       RCLCPP_INFO(this->get_logger(), "执行笛卡尔路径...");
-       
-       // 执行计划的轨迹
-       move_group_->execute(plan);
-       
-       // 等待运动完成
-       move_group_->stop(); // 确保前一个运动完全停止
-       std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 等待执行
-     } else {
-       RCLCPP_ERROR(this->get_logger(), "笛卡尔路径规划失败或完成度太低");
-       
-       // 规划失败时的处理
-       std::this_thread::sleep_for(std::chrono::seconds(1)); // 等待更长时间
-       
-       // 尝试使用较小的移动距离
-       RCLCPP_INFO(this->get_logger(), "尝试使用较小的移动距离...");
-     }
+      // 添加路点
+      waypoints.push_back(waypoint);
+    }
+
+    // 设置笛卡尔路径的参数
+    double eef_step = 0.01;      // 末端执行器的最大步长(米)
+    double jump_threshold = 0.0; // 禁用跳跃检测
+
+    // 计算笛卡尔路径
+    moveit_msgs::msg::RobotTrajectory trajectory;
+    double fraction =
+        move_group_->computeCartesianPath(waypoints,      // 路点
+                                          eef_step,       // 末端步长
+                                          jump_threshold, // 跳跃阈值
+                                          trajectory      // 输出轨迹
+        );
+
+    RCLCPP_INFO(this->get_logger(), "笛卡尔路径规划完成度: %.2f%%",
+                fraction * 100.0);
+
+    // 创建一个计划对象
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    plan.trajectory_ = trajectory;
+
+    // 如果路径规划至少50%成功，执行移动
+    bool success = (fraction > 0.5);
+
+    if (success) {
+      RCLCPP_INFO(this->get_logger(), "执行笛卡尔路径...");
+
+      // 执行计划的轨迹
+      move_group_->execute(plan);
+
+      // 等待运动完成
+      move_group_->stop(); // 确保前一个运动完全停止
+
+      // 线程安全地关闭夹爪抓取目标
+      {
+        std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
+        gripper_state_ = 1.0f;
+      }
+      
+      RCLCPP_INFO(this->get_logger(), "已关闭夹爪抓取目标");
+      
+      // 此处可以添加控制夹持器抓取的代码
+      RCLCPP_INFO(this->get_logger(), "抓取完成，转换到收获状态");
+      
+      // 抓取完成后转到收获状态
+      transitionToHarvesting();
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "笛卡尔路径规划失败或完成度太低");
+      // 尝试使用较小的移动距离
+      RCLCPP_INFO(this->get_logger(), "尝试使用较小的移动距离...");
+    }
 
     // 控制循环频率
-    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 降低循环频率
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 }
 
@@ -478,6 +588,14 @@ void ArmControlNode::handleHarvesting() {
    * 4. 转换到下一个状态
    */
 
+  // 线程安全地打开夹爪释放水果
+  {
+    std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
+    gripper_state_ = 0.0f;
+  }
+  
+  RCLCPP_INFO(this->get_logger(), "已打开夹爪释放水果");
+  
   // 占位符：为了演示，收获后转换到右侧抓取状态
   // 如果从左侧抓取过来，就转到右侧抓取；如果从右侧抓取过来，就回到空闲状态
   static bool from_left = true;

@@ -118,11 +118,12 @@ void receiveThread(const std::shared_ptr<portable_serial_sender::SerialSender>& 
 void servoAngleCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg, MessageData& message_data)
 {
     // 检查消息数据长度是否足够
-    if (msg->data.size() >= 4) {
+    if (msg->data.size() >= 5) {
         message_data.servo1 = msg->data[0];
         message_data.servo2 = msg->data[1];
         message_data.servo3 = msg->data[2];
         message_data.servo4 = msg->data[3];
+        message_data.is_grabing = (msg->data[4] > 0.5f) ? true : false;
     }
 }
 

@@ -106,6 +106,10 @@ private:
   
   // Parameters
   double loop_rate_;
+  
+  // Gripper state (0 = open, 1 = closed)
+  float gripper_state_;
+  std::mutex gripper_state_mutex_;  // 用于保护机械爪状态的互斥锁
 };
 
 } // namespace arm_control
