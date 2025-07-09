@@ -5,6 +5,10 @@
 #include <memory>
 #include <thread>
 #include <mutex>
+#include <iomanip>
+#include <sstream>
+#include <queue>
+#include <condition_variable>
 
 // 发送给下位机的结构体
 struct MessageData
@@ -41,11 +45,52 @@ struct FeedbackData
     float imu_yaw;   //imu的yaw轴数据
 };
 
-// 数据接收线程函数
+// 线程安全的数据包队列
+class PacketQueue
+{
+public:
+    void push(const std::vector<uint8_t>& packet)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            queue_.push(packet);
+        }
+        cv_.notify_one();
+    }
+
+    bool pop(std::vector<uint8_t>& packet, int timeout_ms = -1)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        
+        if (timeout_ms < 0) {
+            // 无超时，等待直到有数据
+            cv_.wait(lock, [this] { return !queue_.empty(); });
+        } else if (!cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                [this] { return !queue_.empty(); })) {
+            // 超时
+            return false;
+        }
+        
+        packet = queue_.front();
+        queue_.pop();
+        return true;
+    }
+
+    bool empty()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queue_.empty();
+    }
+
+private:
+    std::queue<std::vector<uint8_t>> queue_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+};
+
+// 数据接收线程函数 - 只负责读取串口数据并全部记录，不做任何处理
 void receiveThread(const std::shared_ptr<portable_serial_sender::SerialSender>& serial_sender, 
-                  FeedbackData& feedback, 
-                  std::mutex& feedback_mutex,
-                  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr data_init_pub)
+                  PacketQueue& packet_queue)
 {
     std::vector<uint8_t> buffer(1024);
     size_t bytes_read = 0;
@@ -59,27 +104,81 @@ void receiveThread(const std::shared_ptr<portable_serial_sender::SerialSender>& 
             
             if(bytes_read > 0)
             {
-                // 检查起始标记
-                if(buffer[0] == 0xAA)
+                // 创建一个新的向量来存储接收到的数据
+                std::vector<uint8_t> received_data(buffer.begin(), buffer.begin() + bytes_read);
+            
+                // 将读取到的数据直接放入队列，不进行任何处理
+                packet_queue.push(received_data);
+            }
+        }
+        catch(const std::exception& e)
+        {
+            RCLCPP_ERROR(serial_sender->get_logger(), "读取串口数据错误: %s", e.what());
+        }
+    }
+}
+
+// 数据处理线程函数 - 负责判断数据帧的开始和结束，并解码数据
+void processThread(const std::shared_ptr<portable_serial_sender::SerialSender>& serial_sender, 
+                  PacketQueue& packet_queue,
+                  FeedbackData& feedback,
+                  std::mutex& feedback_mutex,
+                  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr data_init_pub)
+{
+    std::vector<uint8_t> raw_data;
+    std::vector<uint8_t> accumulated_buffer; // 用于累积数据
+    
+    while(rclcpp::ok())
+    {
+        // 从队列中获取原始数据，最多等待100ms
+        if(packet_queue.pop(raw_data, 100))
+        {
+            // 将新接收的数据追加到累积缓冲区
+            accumulated_buffer.insert(accumulated_buffer.end(), raw_data.begin(), raw_data.end());
+            
+            // 处理累积缓冲区中的所有完整数据包
+            size_t search_start = 0;
+            while(search_start < accumulated_buffer.size())
+            {
+                // 在剩余数据中寻找起始标记
+                auto start_it = std::find(accumulated_buffer.begin() + search_start, accumulated_buffer.end(), 0xAA);
+                if(start_it == accumulated_buffer.end())
                 {
-                    size_t expected_size = sizeof(FeedbackData);
-                    
-                    // 检查数据长度是否符合预期，需要起始标记、数据和结束标记
-                    if(bytes_read >= expected_size + 2 && buffer[expected_size + 1] == 0xDD) // 2 = 1(起始标记) + 1(结束标记)
+                    // 没有找到起始标记，丢弃所有数据并退出循环
+                    accumulated_buffer.clear();
+                    break;
+                }
+                
+                // 计算起始标记位置的索引
+                size_t start_pos = std::distance(accumulated_buffer.begin(), start_it);
+                
+                // 在起始标记之后寻找结束标记
+                auto end_it = std::find(start_it + 1, accumulated_buffer.end(), 0xDD);
+                if(end_it == accumulated_buffer.end())
+                {
+                    // 没有找到结束标记，保留从起始标记开始的所有数据
+                    // 移动数据到缓冲区开始位置并退出循环
+                    accumulated_buffer.erase(accumulated_buffer.begin(), start_it);
+                    break;
+                }
+                
+                // 计算结束标记位置的索引
+                size_t end_pos = std::distance(accumulated_buffer.begin(), end_it);
+                
+                // 提取完整的数据包（包括起始和结束标记）
+                std::vector<uint8_t> packet(accumulated_buffer.begin() + start_pos, accumulated_buffer.begin() + end_pos + 1);
+                
+                // 检查数据包大小是否符合预期
+                if(packet.size() >= sizeof(FeedbackData) + 2) // 2 = 1(起始标记) + 1(结束标记)
+                {
+                    try
                     {
                         // 使用互斥锁保护共享数据
                         std::lock_guard<std::mutex> lock(feedback_mutex);
                         
                         // 将数据复制到结构体，跳过起始标记
-                        std::memcpy(&feedback, &buffer[1], expected_size);
-                        
-                        RCLCPP_INFO(serial_sender->get_logger(), 
-                            "接收到数据: servo1=%.2f, servo2=%.2f, servo3=%.2f, servo4=%.2f, "
-                            "sensor1=%.2f, sensor2=%.2f, sensor3=%.2f, sensor4=%.2f, imu_yaw=%.2f",
-                            feedback.servo1, feedback.servo2, feedback.servo3, feedback.servo4,
-                            feedback.sensor1, feedback.sensor2, feedback.sensor3, feedback.sensor4,
-                            feedback.imu_yaw);
-                        
+                        std::memcpy(&feedback, &packet[1], sizeof(FeedbackData));
+
                         // 创建消息并发布到/data_init话题
                         std_msgs::msg::Float32MultiArray data_msg;
                         data_msg.data = {
@@ -92,25 +191,21 @@ void receiveThread(const std::shared_ptr<portable_serial_sender::SerialSender>& 
                         data_init_pub->publish(data_msg);
                         RCLCPP_DEBUG(serial_sender->get_logger(), "已发布数据到/data_init话题");
                     }
-                    else
+                    catch(const std::exception& e)
                     {
-                        RCLCPP_WARN(serial_sender->get_logger(), "接收到的数据大小不符合预期: %zu, 需要 %zu", 
-                            bytes_read, expected_size + 2);
+                        RCLCPP_ERROR(serial_sender->get_logger(), "处理数据包错误: %s", e.what());
                     }
                 }
                 else
                 {
-                    RCLCPP_WARN(serial_sender->get_logger(), "数据格式错误：未找到正确的起始标记");
+                    RCLCPP_WARN(serial_sender->get_logger(), "接收到的数据包大小不符合预期: %zu, 需要至少 %zu", 
+                        packet.size(), sizeof(FeedbackData) + 2);
                 }
+                
+                // 更新搜索起始位置为当前结束标记之后的位置
+                search_start = end_pos + 1;
             }
         }
-        catch(const std::exception& e)
-        {
-            RCLCPP_ERROR(serial_sender->get_logger(), "读取串口数据错误: %s", e.what());
-        }
-        
-        // 短暂休眠，避免占用过多CPU
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
@@ -144,13 +239,19 @@ int main(int argc, char** argv)
     FeedbackData feedback{};
     std::mutex feedback_mutex;
     
+    // 创建数据包队列
+    PacketQueue packet_queue;
+    
     // 创建/data_init话题的发布者
     auto data_init_pub = serial_sender_node->create_publisher<std_msgs::msg::Float32MultiArray>(
         "/data_init", 10);
     
     // 启动接收线程
-    std::thread receive_thread(receiveThread, serial_sender_node, std::ref(feedback), 
-                              std::ref(feedback_mutex), data_init_pub);
+    std::thread receive_thread(receiveThread, serial_sender_node, std::ref(packet_queue));
+    
+    // 启动处理线程
+    std::thread process_thread(processThread, serial_sender_node, std::ref(packet_queue),
+                              std::ref(feedback), std::ref(feedback_mutex), data_init_pub);
     
     // 创建订阅，接收舵机角度数据
     auto servo_angle_sub = serial_sender_node->create_subscription<std_msgs::msg::Float32MultiArray>(
@@ -165,24 +266,7 @@ int main(int argc, char** argv)
     while (rclcpp::ok())
     {
         // 发送结构体
-        if (serial_sender_node->sendStruct(msg))
-        {
-            RCLCPP_INFO(serial_sender_node->get_logger(), 
-                "结构体发送成功: servo1=%.2f, servo2=%.2f, servo3=%.2f, servo4=%.2f, "
-                "is_grabing=%s, target_distance=%.2f, target_angle=%.2f", 
-                msg.servo1, msg.servo2, msg.servo3, msg.servo4,
-                msg.is_grabing ? "true" : "false", msg.target_distance, msg.target_angle);
-            
-            // 读取当前反馈数据（使用互斥锁保护）
-            {
-                std::lock_guard<std::mutex> lock(feedback_mutex);
-                RCLCPP_INFO(serial_sender_node->get_logger(), "当前IMU Yaw: %.2f", feedback.imu_yaw);
-            }
-        }
-        else
-        {
-            RCLCPP_ERROR(serial_sender_node->get_logger(), "发送结构体失败");
-        }
+        serial_sender_node->sendStruct(msg);
         
         // 处理回调
         rclcpp::spin_some(serial_sender_node);
@@ -190,10 +274,15 @@ int main(int argc, char** argv)
         loop_rate.sleep();
     }
     
-    // 等待接收线程结束
+    // 等待接收线程和处理线程结束
     if(receive_thread.joinable())
     {
         receive_thread.join();
+    }
+    
+    if(process_thread.joinable())
+    {
+        process_thread.join();
     }
     
     // 关闭ROS2

@@ -2,13 +2,14 @@
 #include <iostream>
 #include <cstring>
 #include <string>
+#include <thread> // 添加线程库以使用sleep_for
 
 namespace portable_serial_sender
 {
 
 SerialSender::SerialSender()
 : Node("serial_sender"),
-  port_name_("/dev/ttyACM0"), // 默认端口，可以通过参数设置
+  port_name_("/dev/ttyUSB0"), // 默认端口，可以通过参数设置
   baud_rate_(115200),         // 默认波特率，可以通过参数设置
   io_context_(std::make_shared<drivers::common::IoContext>(1)),
   is_connected_(false)
@@ -137,6 +138,8 @@ size_t SerialSender::readSerial(std::vector<uint8_t>& buffer)
     if (!is_connected_ && !connectToSerialPort())
     {
         RCLCPP_ERROR(this->get_logger(), "无法连接到串口");
+        //等待500ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         return 0;
     }
 

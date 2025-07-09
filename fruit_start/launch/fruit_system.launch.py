@@ -11,6 +11,7 @@ def generate_launch_description():
     fruit_detector_pkg_dir = get_package_share_directory('fruit_detector')
     arm_moveit_pkg_dir = get_package_share_directory('arm_moveit')
     arm_control_pkg_dir = get_package_share_directory('arm_control')
+    serial_sender_pkg_dir = get_package_share_directory('portable_serial_sender')
     
     # Include USB camera launch file
     usb_camera_launch = IncludeLaunchDescription(
@@ -44,6 +45,17 @@ def generate_launch_description():
         )
     )
     
+    # Include serial sender launch file
+    serial_sender_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(serial_sender_pkg_dir, 'launch', 'serial_sender.launch.py')
+        ),
+        launch_arguments={
+            'port_name': '/dev/ttyUSB0',
+            'baud_rate': '115200'
+        }.items()
+    )
+    
     # Delay arm_control node launch to ensure MoveIt is fully started
     delayed_arm_control = TimerAction(
         period=5.0,  # 5 second delay
@@ -54,5 +66,6 @@ def generate_launch_description():
         usb_camera_launch,
         fruit_detector_launch,
         moveit_demo_launch,
-        delayed_arm_control
+        delayed_arm_control,
+        serial_sender_launch
     ]) 

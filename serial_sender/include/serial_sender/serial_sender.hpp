@@ -98,7 +98,6 @@ bool SerialSender::sendStruct(const T& data)
     {
         // 通过串口发送序列化数据
         size_t bytes_written = serial_driver_->port()->send(serialized_data);
-        RCLCPP_INFO(this->get_logger(), "已发送 %zu 字节到串口", bytes_written);
         return bytes_written == serialized_data.size();
     }
     catch (const std::exception& e)

@@ -15,6 +15,7 @@
   <exec_depend>fruit_detector</exec_depend>
   <exec_depend>arm_moveit</exec_depend>
   <exec_depend>arm_control</exec_depend>
+  <exec_depend>portable_serial_sender</exec_depend>
   
   <export>
     <build_type>ament_cmake</build_type>

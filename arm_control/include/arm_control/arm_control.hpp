@@ -20,7 +20,7 @@
 namespace arm_control
 {
 
-// State machine states
+// 状态机状态定义
 enum class ArmState {
   IDLE,
   LEFT_GROUND_GRABBING,
@@ -35,81 +35,72 @@ public:
   virtual ~ArmControlNode() = default;
 
 private:
-  // 初始化MoveIt接口
+  // 核心方法
   void initializeMoveIt();
-  
-  // Timer callback for state machine loop
   void timerCallback();
-  
-  // Timer callback for servo angle publishing
   void publishServoAnglesCallback();
+  bool waitForJointPositionConvergence(double max_error, int timeout_ms);
   
-  // State machine handlers
+  // 状态处理器
   void handleIdleState();
   void handleLeftGroundGrabbing();
   void handleRightGroundGrabbing();
   void handleHarvesting();
   
-  // Transition functions
+  // 状态转换
   void transitionToIdle();
   void transitionToLeftGroundGrabbing();
   void transitionToRightGroundGrabbing();
   void transitionToHarvesting();
 
-  // Joint state callback
+  // 回调函数
   void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
-  
-  // Target offset callback
   void targetOffsetCallback(const geometry_msgs::msg::Point::SharedPtr msg);
-  
-  // Data init callback for receiving data from serial port
   void dataInitCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
 
-  // MoveIt related members
+  // MoveIt组件
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   moveit::core::RobotStatePtr robot_state_;
   const moveit::core::JointModelGroup* joint_model_group_;
   
-  // Subscribers and publishers
+  // ROS通信
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr target_offset_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr data_init_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr servo_angle_pub_;
   
-  // Latest joint positions
+  // 关节数据
   std::vector<double> latest_joint_positions_;
   std::mutex joint_positions_mutex_;
   
-  // Target offset data
+  // 目标数据
   float target_x_offset_;
   float target_y_offset_;
   int target_class_id_;
   std::mutex target_offset_mutex_;
   bool target_detected_;
   
-  // Data received from serial communication
-  std::vector<float> serial_data_;
+  // 串口数据
+  std::vector<float> serial_data_;  //1-4为四个舵机角度，5-8为四个传感器值，9为imu_yaw
   std::mutex serial_data_mutex_;
   
-  // Current state
+  // 状态跟踪
   ArmState current_state_;
-
-  // Current pose
   geometry_msgs::msg::Pose current_pose_;
   std::mutex current_pose_mutex_;
   
-  // Timers
+  // 定时器
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr servo_publish_timer_;
   rclcpp::TimerBase::SharedPtr move_group_init_timer_;
   rclcpp::TimerBase::SharedPtr idle_timer_;
   
-  // Parameters
+  // 参数
   double loop_rate_;
   
-  // Gripper state (0 = open, 1 = closed)
+  // 机械爪状态 (0 = 打开, 1 = 关闭)
   float gripper_state_;
-  std::mutex gripper_state_mutex_;  // 用于保护机械爪状态的互斥锁
+  std::mutex gripper_state_mutex_;
 };
 
 } // namespace arm_control
