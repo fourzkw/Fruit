@@ -62,7 +62,7 @@ private:
     //   2: 
     //   3: 
     const std::vector<std::string> classes_ {
-        "Chili_ripe", "Chili_unripe", "apple_ripe", "apple_unripe", "pumpking_ripe", "pumpking_unripe"
+        "Chili_ripe", "Chili_unripe", "apple_ripe", "apple_unripe", "onion_ripe", "onion_unripe", "pear", "pumpking_ripe", "pumpking_unripe", "tomato_ripe", "tomato_unripe"
     };
 };
 

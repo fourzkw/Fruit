@@ -12,11 +12,11 @@ def generate_launch_description():
         description='Use simulation time if true, real time if false'
     )
 
-    # Create the arm control node
-    arm_control_node = Node(
-        package='arm_control',
-        executable='arm_control_node',
-        name='arm_control_node',
+    # Create the task planner node
+    task_planner_node = Node(
+        package='task_planner',
+        executable='task_planner_node',
+        name='task_planner_node',
         output='screen',
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time')
@@ -27,5 +27,5 @@ def generate_launch_description():
     # Return the launch description
     return LaunchDescription([
         use_sim_time_arg,
-        arm_control_node
+        task_planner_node
     ]) 

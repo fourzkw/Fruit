@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(arm_control)
+project(task_planner)
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
@@ -14,41 +14,28 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
-find_package(moveit_ros_planning_interface REQUIRED)
-find_package(std_msgs REQUIRED)
+find_package(arm_control REQUIRED)
 find_package(geometry_msgs REQUIRED)
-find_package(action_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-# Generate action messages
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/Grab.action"
-)
 
 # Include directories
 include_directories(include)
 
-# Build arm_control_node
-add_executable(arm_control_node
-  src/arm_control_node.cpp
-  src/arm_control.cpp
+# Build task_planner_node
+add_executable(task_planner_node
+  src/task_planner_node.cpp
+  src/task_planner.cpp
 )
 
-ament_target_dependencies(arm_control_node
+ament_target_dependencies(task_planner_node
   rclcpp
   rclcpp_action
-  moveit_ros_planning_interface
-  std_msgs
+  arm_control
   geometry_msgs
-)
-
-rosidl_target_interfaces(arm_control_node
-  ${PROJECT_NAME} "rosidl_typesupport_cpp"
 )
 
 # Install
 install(TARGETS
-  arm_control_node
+  task_planner_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -68,4 +55,4 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-ament_package() 
+ament_package()

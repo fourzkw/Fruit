@@ -1,0 +1,11 @@
+# Request
+int8 direction  # 0: left, 1: right
+int8[] type_array # 水果种类数组
+int8 position   # 0: 地面, 1: 树上
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float32 completion_percentage 

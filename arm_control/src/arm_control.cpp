@@ -4,10 +4,8 @@
 namespace arm_control {
 
 ArmControlNode::ArmControlNode()
-    : Node("arm_control_node"), current_state_(ArmState::IDLE),
-      loop_rate_(5), // 状态机频率
-      target_detected_(false), target_x_offset_(0.0f), target_y_offset_(0.0f),
-      target_class_id_(0), serial_data_(9, 0.0f), idle_timer_(nullptr),
+    : Node("arm_control_node"), target_detected_(false), target_x_offset_(0.0f),
+      target_y_offset_(0.0f), target_class_id_(0), serial_data_(9, 0.0f),
       servo_publish_thread_running_(false) {
   // 初始化机械爪为打开状态
   {
@@ -15,24 +13,15 @@ ArmControlNode::ArmControlNode()
     gripper_state_ = 0.0f;
   }
 
-  // 参数
-  this->declare_parameter("loop_rate", loop_rate_);
-  loop_rate_ = this->get_parameter("loop_rate").as_double();
-
   // 创建回调组
-  auto moveit_callback_group =
-      this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   auto joint_state_callback_group =
       this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   auto target_offset_callback_group =
       this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   auto serial_data_callback_group =
       this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-
-  // 定时器
-  timer_ =
-      this->create_wall_timer(std::chrono::milliseconds(100),
-                              std::bind(&ArmControlNode::timerCallback, this));
+  auto action_callback_group =
+      this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
   // 订阅
   rclcpp::SubscriptionOptions joint_state_options;
@@ -62,10 +51,23 @@ ArmControlNode::ArmControlNode()
   servo_angle_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
       "/servo_angle", 10);
 
+  // 添加抓取消息发布器
+  garb_msg_pub_ =
+      this->create_publisher<std_msgs::msg::Int8MultiArray>("/garb_msg", 10);
+
+  // 添加动作服务器 - 直接在主线程中初始化
+  grab_action_server_ = rclcpp_action::create_server<GrabAction>(
+      this, "/grab",
+      std::bind(&ArmControlNode::handleGoal, this, std::placeholders::_1,
+                std::placeholders::_2),
+      std::bind(&ArmControlNode::handleCancel, this, std::placeholders::_1),
+      std::bind(&ArmControlNode::handleAccepted, this, std::placeholders::_1));
+
   // 启动伺服角度发布线程
   servo_publish_thread_running_ = true;
-  servo_publish_thread_ = std::thread(&ArmControlNode::servoPublishThreadFunc, this);
-  
+  servo_publish_thread_ =
+      std::thread(&ArmControlNode::servoPublishThreadFunc, this);
+
   // 节点初始化完成后初始化MoveIt接口
   move_group_init_timer_ =
       this->create_wall_timer(std::chrono::seconds(2), [this]() {
@@ -83,13 +85,159 @@ ArmControlNode::~ArmControlNode() {
   RCLCPP_INFO(this->get_logger(), "Servo发布线程已安全终止");
 }
 
+// Action Server Callbacks
+rclcpp_action::GoalResponse
+ArmControlNode::handleGoal(const rclcpp_action::GoalUUID &uuid,
+                           std::shared_ptr<const GrabAction::Goal> goal) {
+  // 构建水果种类数组字符串
+  std::string types_str = "[";
+  for (size_t i = 0; i < goal->type_array.size(); ++i) {
+    types_str += std::to_string(goal->type_array[i]);
+    if (i < goal->type_array.size() - 1) {
+      types_str += ", ";
+    }
+  }
+  types_str += "]";
+
+  RCLCPP_INFO(this->get_logger(),
+              "收到抓取请求: 方向=%d, 水果种类数组=%s, 位置=%d(0:地面,1:树上)",
+              goal->direction, types_str.c_str(), goal->position);
+
+  (void)uuid;
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse ArmControlNode::handleCancel(
+    const std::shared_ptr<GoalHandleGrab> goal_handle) {
+  RCLCPP_INFO(this->get_logger(), "收到取消抓取请求");
+  (void)goal_handle;
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void ArmControlNode::handleAccepted(
+    const std::shared_ptr<GoalHandleGrab> goal_handle) {
+  // 在新线程中执行抓取操作
+  std::thread{std::bind(&ArmControlNode::executeGrabAction, this, goal_handle)}
+      .detach();
+}
+
+// 执行抓取动作
+void ArmControlNode::executeGrabAction(
+    const std::shared_ptr<GoalHandleGrab> goal_handle) {
+  RCLCPP_INFO(this->get_logger(), "开始执行抓取动作");
+
+  const auto goal = goal_handle->get_goal();
+  auto feedback = std::make_shared<GrabAction::Feedback>();
+  auto result = std::make_shared<GrabAction::Result>();
+
+  // 发布抓取类型消息
+  auto garb_msg = std::make_shared<std_msgs::msg::Int8MultiArray>();
+
+  // 使用完整的水果类型数组
+  garb_msg->data.resize(goal->type_array.size());
+  for (size_t i = 0; i < goal->type_array.size(); ++i) {
+    garb_msg->data[i] = goal->type_array[i];
+  }
+
+  garb_msg_pub_->publish(*garb_msg);
+
+  feedback->completion_percentage = 10.0;
+  goal_handle->publish_feedback(feedback);
+
+  bool success = true;
+
+  // 根据抓取方向和位置执行不同操作
+  if (goal->direction == 0) {  // 左侧
+    if (goal->position == 0) { // 地面
+      RCLCPP_INFO(this->get_logger(), "执行左侧地面抓取序列");
+
+      feedback->completion_percentage = 20.0;
+      goal_handle->publish_feedback(feedback);
+
+      // 执行左侧地面抓取序列
+      if (!transitionToLeftGroundGrabbing()) {
+        RCLCPP_ERROR(this->get_logger(), "转换到左侧地面抓取姿态失败");
+        result->message = "转换到左侧地面抓取姿态失败";
+        // success = false;
+      }
+
+      if (success) {
+        feedback->completion_percentage = 40.0;
+        goal_handle->publish_feedback(feedback);
+
+        // 执行抓取操作
+        if (!handleLeftGroundGrabbing()) {
+          RCLCPP_ERROR(this->get_logger(), "左侧地面抓取操作失败");
+          result->message = "左侧地面抓取操作失败";
+          // success = false;
+        }
+      }
+
+      if (success) {
+        feedback->completion_percentage = 60.0;
+        goal_handle->publish_feedback(feedback);
+
+        // 转换到收获位置
+        if (!transitionToHarvesting()) {
+          RCLCPP_ERROR(this->get_logger(), "转换到收获位置失败");
+          result->message = "转换到收获位置失败";
+          // success = false;
+        }
+      }
+      if (success) {
+        feedback->completion_percentage = 80.0;
+        goal_handle->publish_feedback(feedback);
+
+        // 执行收获操作
+        if (!handleHarvesting()) {
+          RCLCPP_ERROR(this->get_logger(), "收获操作失败");
+          result->message = "收获操作失败";
+          // success = false;
+        } else {
+          feedback->completion_percentage = 90.0;
+          goal_handle->publish_feedback(feedback);
+        }
+      }
+    }
+  } else {  // 右侧
+    if (goal->position == 0) { // 地面
+      RCLCPP_INFO(this->get_logger(), "执行右侧地面抓取序列");
+      // TODO: 实现右侧地面抓取逻辑
+    }
+  }
+
+  // 设置最终结果
+  if (success) {
+    feedback->completion_percentage = 100.0;
+    goal_handle->publish_feedback(feedback);
+
+    result->success = true;
+    if (result->message.empty()) {
+      result->message = "抓取操作成功完成";
+    }
+    goal_handle->succeed(result);
+    RCLCPP_INFO(this->get_logger(), "抓取动作成功完成");
+  } else {
+    result->success = false;
+    if (result->message.empty()) {
+      result->message = "抓取操作失败";
+    }
+    goal_handle->abort(result);
+    RCLCPP_ERROR(this->get_logger(), "抓取动作失败: %s",
+                 result->message.c_str());
+  }
+
+  transitionToIdle();
+}
+
+// 伺服角度发布线程
 void ArmControlNode::servoPublishThreadFunc() {
   RCLCPP_INFO(this->get_logger(), "伺服角度发布线程已启动");
-  
+
   while (servo_publish_thread_running_ && rclcpp::ok()) {
     // 创建伺服角度消息
     std_msgs::msg::Float32MultiArray servo_angles;
-    
+
     {
       std::lock_guard<std::mutex> lock(joint_positions_mutex_);
       if (latest_joint_positions_.empty()) {
@@ -113,14 +261,15 @@ void ArmControlNode::servoPublishThreadFunc() {
 
     // 发布消息
     servo_angle_pub_->publish(servo_angles);
-    
+
     // 按固定频率发布
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-  
+
   RCLCPP_INFO(this->get_logger(), "伺服角度发布线程结束");
 }
 
+// 初始化MoveIt接口
 void ArmControlNode::initializeMoveIt() {
   try {
     move_group_ =
@@ -158,6 +307,7 @@ void ArmControlNode::initializeMoveIt() {
   }
 }
 
+// 关节状态更新
 void ArmControlNode::jointStateCallback(
     const sensor_msgs::msg::JointState::SharedPtr msg) {
   std::lock_guard<std::mutex> lock(joint_positions_mutex_);
@@ -221,6 +371,7 @@ void ArmControlNode::jointStateCallback(
   }
 }
 
+// 更新下位机数据
 void ArmControlNode::dataInitCallback(
     const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
   if (msg->data.size() == 9) {
@@ -234,61 +385,10 @@ void ArmControlNode::dataInitCallback(
   }
 }
 
-void ArmControlNode::publishServoAnglesCallback() {
-  // 此方法不再使用，保留以便将来可能需要
-  RCLCPP_WARN_ONCE(this->get_logger(), "调用了未使用的publishServoAnglesCallback方法");
-}
+// 左侧地面抓取执行函数
+bool ArmControlNode::handleLeftGroundGrabbing() {
+  RCLCPP_INFO(this->get_logger(), "执行左侧地面抓取操作");
 
-// 状态机回调
-void ArmControlNode::timerCallback() {
-  try {
-    static int counter = 0;
-    counter++;
-
-    // 每10次迭代记录一次日志
-    if (counter % 10 == 0) {
-      RCLCPP_DEBUG(this->get_logger(), "状态机迭代: %d", counter);
-    }
-
-    // 状态机
-    switch (current_state_) {
-    case ArmState::IDLE:
-      handleIdleState();
-      break;
-    case ArmState::LEFT_GROUND_GRABBING:
-      handleLeftGroundGrabbing();
-      break;
-    case ArmState::RIGHT_GROUND_GRABBING:
-      handleRightGroundGrabbing();
-      break;
-    case ArmState::HARVESTING:
-      handleHarvesting();
-      break;
-    default:
-      RCLCPP_ERROR(this->get_logger(), "状态机中的未知状态");
-      transitionToIdle();
-      break;
-    }
-  } catch (const std::exception &e) {
-    RCLCPP_ERROR(this->get_logger(), "定时器回调中的异常: %s", e.what());
-  } catch (...) {
-    RCLCPP_ERROR(this->get_logger(), "定时器回调中的未知异常");
-  }
-}
-
-// 待机状态执行函数
-void ArmControlNode::handleIdleState() {
-  if (!idle_timer_ || !idle_timer_->is_steady()) {
-    idle_timer_ = this->create_wall_timer(std::chrono::seconds(5), [this]() {
-      RCLCPP_INFO(this->get_logger(), "正在转换到左侧地面抓取状态");
-      this->transitionToLeftGroundGrabbing();
-      idle_timer_->cancel();
-    });
-  }
-}
-
-// 左侧地面抓取状态执行函数
-void ArmControlNode::handleLeftGroundGrabbing() {
   float current_x_offset = 0.0f;
   float current_y_offset = 0.0f;
 
@@ -304,7 +404,7 @@ void ArmControlNode::handleLeftGroundGrabbing() {
     count++;
     if (count > 10) {
       transitionToIdle();
-      return;
+      return false;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
@@ -405,8 +505,7 @@ void ArmControlNode::handleLeftGroundGrabbing() {
     // 判断真实机械臂状态是否运动到仿真机械臂位置
     if (!waitForJointPositionConvergence(0.05, 3000)) {
       RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到抓取位置");
-      transitionToIdle();
-      return;
+      return false;
     } else {
       RCLCPP_INFO(this->get_logger(), "机械臂已达到抓取位置");
 
@@ -417,24 +516,22 @@ void ArmControlNode::handleLeftGroundGrabbing() {
       }
 
       RCLCPP_INFO(this->get_logger(), "已关闭机械爪抓取目标");
-      transitionToHarvesting();
-      return;
+      return true;
     }
   } else {
     RCLCPP_ERROR(this->get_logger(), "移动到抓取位置失败");
-    transitionToIdle();
-    return;
+    return false;
   }
 }
 
-// 右侧地面抓取状态执行函数
-void ArmControlNode::handleRightGroundGrabbing() {
-  RCLCPP_DEBUG(this->get_logger(), "正处于右侧地面抓取状态");
-  transitionToHarvesting();
+// 右侧地面抓取执行函数
+bool ArmControlNode::handleRightGroundGrabbing() {
+  RCLCPP_INFO(this->get_logger(), "执行右侧地面抓取操作");
+  // TODO: 实现右侧地面抓取逻辑
 }
 
-// 收获状态执行函数
-void ArmControlNode::handleHarvesting() {
+// 收获执行函数
+bool ArmControlNode::handleHarvesting() {
   RCLCPP_DEBUG(this->get_logger(), "正处于收获状态");
 
   // 打开机械爪释放水果
@@ -445,15 +542,14 @@ void ArmControlNode::handleHarvesting() {
   RCLCPP_INFO(this->get_logger(), "已打开机械爪释放水果");
 
   // TODO: 等待真实夹爪状态为张开状态
-
-  // 机械臂回到初始位置
-  transitionToIdle();
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(500)); // 简单等待夹爪打开
+  return true;
 }
 
-// 转换到待机状态
-void ArmControlNode::transitionToIdle() {
+// 转换到待机姿态
+bool ArmControlNode::transitionToIdle() {
   RCLCPP_INFO(this->get_logger(), "正在转换到空闲状态");
-  current_state_ = ArmState::IDLE;
 
   move_group_->setNamedTarget("mid_pose");
   moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -461,7 +557,7 @@ void ArmControlNode::transitionToIdle() {
 
   if (!success) {
     RCLCPP_ERROR(this->get_logger(), "规划到mid_pose失败");
-    return;
+    return false; // 规划失败，返回失败
   }
 
   move_group_->execute(plan);
@@ -469,15 +565,16 @@ void ArmControlNode::transitionToIdle() {
   // 判断真实机械臂状态是否运动到仿真机械臂位置
   if (!waitForJointPositionConvergence(0.05, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到idle位置");
+    return false; // 位置未收敛，返回失败
   } else {
     RCLCPP_INFO(this->get_logger(), "机械臂已到达idle位置");
+    return true; // 成功到达idle位置
   }
 }
 
-// 转换到左侧地面抓取状态
-void ArmControlNode::transitionToLeftGroundGrabbing() {
+// 转换到左侧地面抓取姿态
+bool ArmControlNode::transitionToLeftGroundGrabbing() {
   RCLCPP_INFO(this->get_logger(), "正在转换到左侧地面抓取状态");
-  current_state_ = ArmState::LEFT_GROUND_GRABBING;
 
   move_group_->setNamedTarget("left_pose");
   moveit::planning_interface::MoveGroupInterface::Plan plan;
@@ -485,7 +582,7 @@ void ArmControlNode::transitionToLeftGroundGrabbing() {
 
   if (!success) {
     RCLCPP_ERROR(this->get_logger(), "规划到left_pose失败");
-    return;
+    return false; // 规划失败，返回失败
   }
 
   move_group_->execute(plan);
@@ -493,15 +590,40 @@ void ArmControlNode::transitionToLeftGroundGrabbing() {
   // 判断真实机械臂状态是否运动到仿真机械臂位置
   if (!waitForJointPositionConvergence(0.05, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
+    return false; // 位置未收敛，返回失败
   } else {
     RCLCPP_INFO(this->get_logger(), "机械臂已到达目标位置");
+    return true; // 成功到达目标位置
   }
 }
 
-void ArmControlNode::transitionToRightGroundGrabbing() {
-  current_state_ = ArmState::RIGHT_GROUND_GRABBING;
+// 转换到右侧地面抓取姿态
+bool ArmControlNode::transitionToRightGroundGrabbing() {
+  RCLCPP_INFO(this->get_logger(), "正在转换到右侧地面抓取状态");
+
+  // 可以添加右侧抓取的具体实现
+  move_group_->setNamedTarget("right_pose"); // 假设存在"right_pose"命名位姿
+  moveit::planning_interface::MoveGroupInterface::Plan plan;
+  bool success = static_cast<bool>(move_group_->plan(plan));
+
+  if (!success) {
+    RCLCPP_ERROR(this->get_logger(), "规划到right_pose失败");
+    return false; // 规划失败，返回失败
+  }
+
+  move_group_->execute(plan);
+
+  // 判断真实机械臂状态是否运动到仿真机械臂位置
+  if (!waitForJointPositionConvergence(0.05, 5000)) {
+    RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
+    return false; // 位置未收敛，返回失败
+  } else {
+    RCLCPP_INFO(this->get_logger(), "机械臂已到达右侧抓取位置");
+    return true; // 成功到达目标位置
+  }
 }
 
+// 使用笛卡尔运动函数移动末端执行器
 bool ArmControlNode::moveEndEffectorCartesian(double x_displacement,
                                               double y_displacement,
                                               double z_displacement,
@@ -578,18 +700,17 @@ bool ArmControlNode::moveEndEffectorCartesian(double x_displacement,
   }
 }
 
-void ArmControlNode::transitionToHarvesting() {
+bool ArmControlNode::transitionToHarvesting() {
   RCLCPP_INFO(this->get_logger(), "正在转换到收获状态");
-  current_state_ = ArmState::HARVESTING;
 
-  // 运动到预设的harvest_pose
-  move_group_->setNamedTarget("harvest_pose");
+  // 运动到预设的harvest_pose1
+  move_group_->setNamedTarget("harvest_pose1");
   moveit::planning_interface::MoveGroupInterface::Plan plan;
   bool success = static_cast<bool>(move_group_->plan(plan));
 
   if (!success) {
-    RCLCPP_ERROR(this->get_logger(), "规划到harvest_pose失败");
-    return;
+    RCLCPP_ERROR(this->get_logger(), "规划到harvest_pose1失败");
+    return false; // 规划失败，返回失败
   }
 
   move_group_->execute(plan);
@@ -597,8 +718,10 @@ void ArmControlNode::transitionToHarvesting() {
   // 判断真实机械臂状态是否运动到仿真机械臂位置
   if (!waitForJointPositionConvergence(0.05, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
+    return false; // 位置未收敛，返回失败
   } else {
     RCLCPP_INFO(this->get_logger(), "机械臂已到达目标位置");
+    return true; // 成功到达目标位置
   }
 }
 

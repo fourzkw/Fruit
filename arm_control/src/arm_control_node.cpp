@@ -6,22 +6,18 @@ int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
   
-  // 创建多线程执行器
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 12); // 使用8个线程
+  // 创建多线程执行器，增加线程数以确保能处理所有回调组
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 16); // 使用16个线程
   
   // 创建节点
   auto node = std::make_shared<arm_control::ArmControlNode>();
   // 添加节点到执行器
   executor.add_node(node);
   
-  std::cout << "Starting executor spin..." << std::endl;
+  std::cout << "正在启动arm_control节点..." << std::endl;
   
   // 运行执行器
-  std::thread executor_thread([&]() {
-    executor.spin();
-  });
-  
-  executor_thread.join();
+  executor.spin();
   
   rclcpp::shutdown();
   return 0;
