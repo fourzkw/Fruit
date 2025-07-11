@@ -15,6 +15,15 @@ def generate_launch_description():
     camera_device = LaunchConfiguration('camera_device', default='/dev/video0')
     camera_frame_id = LaunchConfiguration('camera_frame_id', default='camera_optical_frame')
     
+    # Exposure and image quality settings
+    auto_exposure = LaunchConfiguration('auto_exposure', default=3)  # 1=manual, 3=auto
+    exposure_time_absolute = LaunchConfiguration('exposure_time_absolute', default=100)
+    brightness = LaunchConfiguration('brightness', default=0)
+    contrast = LaunchConfiguration('contrast', default=10)
+    gain = LaunchConfiguration('gain', default=0)
+    white_balance_automatic = LaunchConfiguration('white_balance_automatic', default=True)
+    white_balance_temperature = LaunchConfiguration('white_balance_temperature', default=4500)
+    
     # Prepare camera info URL
     camera_info_path = os.path.join(pkg_dir, 'config', 'head_camera.yaml')
     camera_info_url = LaunchConfiguration(
@@ -36,6 +45,9 @@ def generate_launch_description():
             'image_size': [640, 480],
             'camera_info_url': camera_info_url,
             'publish_rate': 30.0,
+            # Exposure settings
+            'auto_exposure': 0,
+            'exposure_time_absolute': 100,
         }],
         output='screen',
     )
@@ -75,6 +87,42 @@ def generate_launch_description():
             'camera_info_url',
             default_value=f'file://{camera_info_path}',
             description='Camera calibration file URL'
+        ),
+        # Exposure settings arguments
+        DeclareLaunchArgument(
+            'auto_exposure',
+            default_value='3',
+            description='Auto exposure mode (1=manual, 3=auto)'
+        ),
+        DeclareLaunchArgument(
+            'exposure_time_absolute',
+            default_value='100',
+            description='Absolute exposure time (when in manual mode)'
+        ),
+        DeclareLaunchArgument(
+            'brightness',
+            default_value='0',
+            description='Image brightness (-64 to 64)'
+        ),
+        DeclareLaunchArgument(
+            'contrast',
+            default_value='10',
+            description='Image contrast (0 to 64)'
+        ),
+        DeclareLaunchArgument(
+            'gain',
+            default_value='0',
+            description='Image gain (0 to 100)'
+        ),
+        DeclareLaunchArgument(
+            'white_balance_automatic',
+            default_value='true',
+            description='Auto white balance'
+        ),
+        DeclareLaunchArgument(
+            'white_balance_temperature',
+            default_value='4500',
+            description='White balance temperature (when auto white balance is off)'
         ),
         
         # Nodes to launch

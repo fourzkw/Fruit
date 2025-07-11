@@ -16,6 +16,7 @@
 #include <thread>
 #include <moveit/robot_model/robot_model.h>
 #include <moveit/robot_state/robot_state.h>
+#include <atomic>
 
 namespace arm_control
 {
@@ -32,7 +33,7 @@ class ArmControlNode : public rclcpp::Node
 {
 public:
   ArmControlNode();
-  virtual ~ArmControlNode() = default;
+  ~ArmControlNode();
 
 private:
   // 核心方法
@@ -40,6 +41,7 @@ private:
   void timerCallback();
   void publishServoAnglesCallback();
   bool waitForJointPositionConvergence(double max_error, int timeout_ms);
+  bool moveEndEffectorCartesian(double x_displacement, double y_displacement, double z_displacement, int timeout_ms);
   
   // 状态处理器
   void handleIdleState();
@@ -57,6 +59,11 @@ private:
   void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
   void targetOffsetCallback(const geometry_msgs::msg::Point::SharedPtr msg);
   void dataInitCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
+
+  // 线程相关
+  std::thread servo_publish_thread_;
+  std::atomic<bool> servo_publish_thread_running_;
+  void servoPublishThreadFunc();
 
   // MoveIt组件
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;

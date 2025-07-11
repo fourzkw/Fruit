@@ -9,6 +9,7 @@
 #include <sstream>
 #include <queue>
 #include <condition_variable>
+#include <cmath> // 添加cmath头文件，用于M_PI常量
 
 // 发送给下位机的结构体
 struct MessageData
@@ -214,10 +215,11 @@ void servoAngleCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg, M
 {
     // 检查消息数据长度是否足够
     if (msg->data.size() >= 5) {
-        message_data.servo1 = msg->data[0];
-        message_data.servo2 = msg->data[1];
-        message_data.servo3 = msg->data[2];
-        message_data.servo4 = msg->data[3];
+        // 将弧度值转换为角度值 (radians * 180 / PI)
+        message_data.servo1 = msg->data[0] * (180.0 / M_PI);
+        message_data.servo2 = msg->data[1] * (180.0 / M_PI);
+        message_data.servo3 = msg->data[2] * (180.0 / M_PI);
+        message_data.servo4 = msg->data[3] * (180.0 / M_PI);
         message_data.is_grabing = (msg->data[4] > 0.5f) ? true : false;
     }
 }
@@ -233,7 +235,7 @@ int main(int argc, char** argv)
     RCLCPP_INFO(serial_sender_node->get_logger(), "便携式串口发送节点已启动");
     
     // 创建用于发送的示例结构体
-    MessageData msg{45.0, 30.0, 60.0, 20.0, true, 2.5, 90.0};
+    MessageData msg{0, 0, 0, 0, false, 0, 0};
     
     // 创建用于接收的结构体和互斥锁
     FeedbackData feedback{};
@@ -267,6 +269,12 @@ int main(int argc, char** argv)
     {
         // 发送结构体
         serial_sender_node->sendStruct(msg);
+        
+        // 打印发送的舵机角度和夹爪状态信息
+        RCLCPP_INFO(serial_sender_node->get_logger(), 
+            "发送数据 - 舵机角度: [%.2f, %.2f, %.2f, %.2f], 夹爪: %s", 
+            msg.servo1, msg.servo2, msg.servo3, msg.servo4, 
+            msg.is_grabing ? "闭合" : "张开");
         
         // 处理回调
         rclcpp::spin_some(serial_sender_node);
