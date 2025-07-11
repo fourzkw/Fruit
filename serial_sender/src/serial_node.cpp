@@ -2,6 +2,7 @@
 #include "serial_sender/struct_serializer.hpp"
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <navigation/msg/move_msg.hpp>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -224,6 +225,13 @@ void servoAngleCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg, M
     }
 }
 
+// 移动命令回调函数
+void moveMsgCallback(const navigation::msg::MoveMsg::SharedPtr msg, MessageData& message_data)
+{
+    message_data.target_distance = msg->target_distance;
+    message_data.target_angle = msg->target_angle;
+}
+
 int main(int argc, char** argv)
 {
     // 初始化ROS2
@@ -261,6 +269,13 @@ int main(int argc, char** argv)
         [&msg](const std_msgs::msg::Float32MultiArray::SharedPtr servo_msg) {
             servoAngleCallback(servo_msg, msg);
         });
+        
+    // 创建订阅，接收移动命令数据
+    auto move_msg_sub = serial_sender_node->create_subscription<navigation::msg::MoveMsg>(
+        "/move_msg", 10,
+        [&msg](const navigation::msg::MoveMsg::SharedPtr move_msg) {
+            moveMsgCallback(move_msg, msg);
+        });
     
     // 周期性发送结构体 - 50ms (20Hz)
     rclcpp::Rate loop_rate(20); // 20赫兹 = 50毫秒周期
@@ -272,9 +287,10 @@ int main(int argc, char** argv)
         
         // 打印发送的舵机角度和夹爪状态信息
         RCLCPP_INFO(serial_sender_node->get_logger(), 
-            "发送数据 - 舵机角度: [%.2f, %.2f, %.2f, %.2f], 夹爪: %s", 
+            "发送数据 - 舵机角度: [%.2f, %.2f, %.2f, %.2f], 夹爪: %s, 目标距离: %.2f, 目标角度: %.2f", 
             msg.servo1, msg.servo2, msg.servo3, msg.servo4, 
-            msg.is_grabing ? "闭合" : "张开");
+            msg.is_grabing ? "闭合" : "张开",
+            msg.target_distance, msg.target_angle);
         
         // 处理回调
         rclcpp::spin_some(serial_sender_node);

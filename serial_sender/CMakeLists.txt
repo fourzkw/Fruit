@@ -15,6 +15,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(serial_driver REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(navigation REQUIRED)
 
 # 创建库目标
 add_library(${PROJECT_NAME} SHARED
@@ -33,6 +34,7 @@ ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   serial_driver
   std_msgs
+  navigation
 )
 
 # 创建示例可执行文件
@@ -42,6 +44,7 @@ ament_target_dependencies(serial_node
   rclcpp
   serial_driver
   std_msgs
+  navigation
 )
 
 # 安装库
@@ -70,7 +73,7 @@ install(DIRECTORY launch/
 
 # 导出目标
 ament_export_targets(${PROJECT_NAME} HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp serial_driver std_msgs)
+ament_export_dependencies(rclcpp serial_driver std_msgs navigation)
 
 # 启用作为独立包使用
 ament_package() 

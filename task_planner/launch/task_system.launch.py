@@ -28,6 +28,20 @@ def generate_launch_description():
         }.items()
     )
 
+    # Include navigation launch file
+    navigation_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('navigation'),
+                'launch',
+                'navigation.launch.py'
+            ])
+        ]),
+        launch_arguments={
+            'use_sim_time': LaunchConfiguration('use_sim_time')
+        }.items()
+    )
+
     # Create the task planner node
     task_planner_node = Node(
         package='task_planner',
@@ -44,5 +58,6 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         arm_control_launch,
+        navigation_launch,
         task_planner_node
     ]) 

@@ -1,0 +1,12 @@
+# Goal
+int8 movement_type   # 0: linear movement, 1: angular movement
+float32 value        # distance in meters or angle in radians
+
+---
+# Result
+bool success
+string message
+
+---
+# Feedback
+float32 completion_percentage 
