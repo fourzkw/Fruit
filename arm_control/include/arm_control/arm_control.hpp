@@ -83,7 +83,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr target_offset_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr data_init_sub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr servo_angle_pub_;
-  rclcpp::Publisher<std_msgs::msg::Int8MultiArray>::SharedPtr garb_msg_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int8MultiArray>::SharedPtr grab_msg_pub_;
   
   // 动作服务器
   rclcpp_action::Server<GrabAction>::SharedPtr grab_action_server_;

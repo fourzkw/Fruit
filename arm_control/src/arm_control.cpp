@@ -52,10 +52,10 @@ ArmControlNode::ArmControlNode()
       "/servo_angle", 10);
 
   // 添加抓取消息发布器
-  garb_msg_pub_ =
-      this->create_publisher<std_msgs::msg::Int8MultiArray>("/garb_msg", 10);
+  grab_msg_pub_ =
+      this->create_publisher<std_msgs::msg::Int8MultiArray>("/grab_msg", 10);
 
-  // 添加动作服务器 - 直接在主线程中初始化
+  // 添加动作服务器
   grab_action_server_ = rclcpp_action::create_server<GrabAction>(
       this, "/grab",
       std::bind(&ArmControlNode::handleGoal, this, std::placeholders::_1,
@@ -131,15 +131,15 @@ void ArmControlNode::executeGrabAction(
   auto result = std::make_shared<GrabAction::Result>();
 
   // 发布抓取类型消息
-  auto garb_msg = std::make_shared<std_msgs::msg::Int8MultiArray>();
+  auto grab_msg = std::make_shared<std_msgs::msg::Int8MultiArray>();
 
   // 使用完整的水果类型数组
-  garb_msg->data.resize(goal->type_array.size());
+  grab_msg->data.resize(goal->type_array.size());
   for (size_t i = 0; i < goal->type_array.size(); ++i) {
-    garb_msg->data[i] = goal->type_array[i];
+    grab_msg->data[i] = goal->type_array[i];
   }
 
-  garb_msg_pub_->publish(*garb_msg);
+  grab_msg_pub_->publish(*grab_msg);
 
   feedback->completion_percentage = 10.0;
   goal_handle->publish_feedback(feedback);

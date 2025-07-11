@@ -46,8 +46,32 @@ FruitDetector::FruitDetector(const rclcpp::NodeOptions &options)
           [this](sensor_msgs::msg::CameraInfo::SharedPtr msg) {
             camera_info_ = msg;
           });
+          
+  // 添加抓取消息订阅
+  grab_msg_subscription_ = this->create_subscription<std_msgs::msg::Int8MultiArray>(
+      "/grab_msg", 10,
+      std::bind(&FruitDetector::grabMsgCallback, this, std::placeholders::_1));
 
   RCLCPP_INFO(this->get_logger(), "水果检测节点初始化完成");
+}
+
+// 实现抓取消息回调函数
+void FruitDetector::grabMsgCallback(const std_msgs::msg::Int8MultiArray::SharedPtr msg) {
+  // 更新目标水果类型数组
+  target_fruit_types_.clear();
+  target_fruit_types_.assign(msg->data.begin(), msg->data.end());
+  
+  // 构建水果类型数组字符串用于日志
+  std::string types_str = "[";
+  for (size_t i = 0; i < target_fruit_types_.size(); ++i) {
+    types_str += std::to_string(target_fruit_types_[i]);
+    if (i < target_fruit_types_.size() - 1) {
+      types_str += ", ";
+    }
+  }
+  types_str += "]";
+  
+  RCLCPP_INFO(this->get_logger(), "收到目标水果类型数组: %s", types_str.c_str());
 }
 
 void FruitDetector::imageCallback(
@@ -79,40 +103,63 @@ void FruitDetector::imageCallback(
 
     if (!detections.empty()) {
       auto target_detection = detections[0];
-      float target_x_offset = 320;
-      float target_y_offset = 240;
+      float target_x_offset = 640; // 更新为1280的一半
+      float target_y_offset = 480; // 更新为960的一半
       int target_class_id = 0;
+      bool target_found = false;
 
       for (auto detection : detections)
       {
+        int detected_class_id = (int)detection[0].x;
+        
+        // 检查当前检测的类别是否在目标水果类型列表中
+        bool is_target_class = target_fruit_types_.empty(); // 如果没有指定目标类型，则接受所有类型
+        
+        for (const auto& target_type : target_fruit_types_) {
+          if (detected_class_id == target_type) {
+            is_target_class = true;
+            break;
+          }
+        }
+        
+        // 如果类型不匹配，跳过此检测
+        if (!is_target_class) {
+          continue;
+        }
+        
         float center_x = (detection[1].x + detection[2].x) / 2;
         float center_y = (detection[1].y + detection[2].y) / 2;
-        float x_offset = 320 - center_x;
-        float y_offset = 240 - center_y;
+        float x_offset = 640 - center_x; // 更新为1280的一半
+        float y_offset = 480 - center_y; // 更新为960的一半
 
-        // 在图像上绘制中心点
+        // 在图像上绘制中心点，目标类型用红色，其他用黄色
+        cv::Scalar circle_color = is_target_class ? 
+                                  cv::Scalar(0, 0, 255) :  // 红色表示目标水果
+                                  cv::Scalar(0, 255, 255); // 黄色表示非目标水果
         cv::circle(frame, cv::Point(center_x, center_y), 5,
-                   cv::Scalar(0, 0, 255), -1); // 红色实心圆
+                   circle_color, -1);
 
-        if (abs(x_offset) + abs(y_offset) <
-            abs(target_x_offset) + abs(target_y_offset)) {
+        if (is_target_class && 
+            (!target_found || 
+             (abs(x_offset) + abs(y_offset) < abs(target_x_offset) + abs(target_y_offset)))) {
           target_detection = detection;
           target_x_offset = x_offset;
           target_y_offset = y_offset;
-          target_class_id = (int)detection[0].x;
+          target_class_id = detected_class_id;
+          target_found = true;
         }
       }
 
       // 绘制测试图像标识
-      cv::line(frame, cv::Point(320, 0), cv::Point(320, 480),
+      cv::line(frame, cv::Point(640, 0), cv::Point(640, 960), // 垂直线通过中心点
                cv::Scalar(0, 255, 0), 1);
-      cv::line(frame, cv::Point(0, 240), cv::Point(640, 240),
+      cv::line(frame, cv::Point(0, 480), cv::Point(1280, 480), // 水平线通过中心点
                cv::Scalar(0, 255, 0), 1);
       cv::putText(frame, "target_x_offset: " + std::to_string(target_x_offset),
-                  cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                  cv::Point(20, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, // 增大字体
                   cv::Scalar(0, 0, 255), 2);
       cv::putText(frame, "target_y_offset: " + std::to_string(target_y_offset),
-                  cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                  cv::Point(20, 100), cv::FONT_HERSHEY_SIMPLEX, 1.0, // 增大字体
                   cv::Scalar(0, 0, 255), 2);
                   
       // 发布目标偏移量
@@ -135,8 +182,8 @@ void FruitDetector::imageCallback(
     // 添加FPS显示
     char fps_text[50];
     snprintf(fps_text, sizeof(fps_text), "FPS: %.1f", current_fps_);
-    cv::putText(frame, fps_text, cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 
-                0.5, cv::Scalar(0, 255, 0), 2);
+    cv::putText(frame, fps_text, cv::Point(20, 150), cv::FONT_HERSHEY_SIMPLEX, 
+                1.0, cv::Scalar(0, 255, 0), 2);
 
     // 创建并发布检测消息
     auto detection_msg = createDetectionMessage(detections, msg->header);
