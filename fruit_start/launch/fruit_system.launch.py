@@ -13,6 +13,7 @@ def generate_launch_description():
     arm_control_pkg_dir = get_package_share_directory('arm_control')
     serial_sender_pkg_dir = get_package_share_directory('portable_serial_sender')
     task_planner_pkg_dir = get_package_share_directory('task_planner')
+    navigation_pkg_dir = get_package_share_directory('navigation')
     
     # Include USB camera launch file
     usb_camera_launch = IncludeLaunchDescription(
@@ -57,6 +58,16 @@ def generate_launch_description():
         }.items()
     )
     
+    # Include navigation launch file
+    navigation_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(navigation_pkg_dir, 'launch', 'navigation.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': 'false'
+        }.items()
+    )
+    
     # Include task planner launch file
     task_planner_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -79,11 +90,18 @@ def generate_launch_description():
         actions=[task_planner_launch]
     )
     
+    # Delay navigation node launch to ensure other components are ready
+    delayed_navigation = TimerAction(
+        period=6.0,  # 6 second delay (between arm_control and task_planner)
+        actions=[navigation_launch]
+    )
+    
     return LaunchDescription([
         usb_camera_launch,
         fruit_detector_launch,
         moveit_demo_launch,
         delayed_arm_control,
         serial_sender_launch,
+        delayed_navigation,
         delayed_task_planner
     ]) 

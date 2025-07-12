@@ -418,7 +418,7 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
     }
 
     // 如果偏移足够小，退出循环
-    if (abs(current_x_offset) < 15) {
+    if (abs(current_x_offset) < 30) {
       RCLCPP_INFO(this->get_logger(), "X轴调整完成");
       break;
     }
@@ -488,7 +488,6 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
       } else {
         RCLCPP_INFO(this->get_logger(), "机械臂已达到目标位置");
       }
-      break;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -501,27 +500,32 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
   bool grab_success = moveEndEffectorCartesian(
       adjust_eff_xposition, adjust_eff_yposition, adjust_eff_zposition, 3000);
 
-  if (grab_success) {
-    // 判断真实机械臂状态是否运动到仿真机械臂位置
-    if (!waitForJointPositionConvergence(0.05, 3000)) {
-      RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到抓取位置");
-      return false;
-    } else {
-      RCLCPP_INFO(this->get_logger(), "机械臂已达到抓取位置");
+  // if (grab_success) {
+  //   // 判断真实机械臂状态是否运动到仿真机械臂位置
+  //   if (!waitForJointPositionConvergence(0.05, 3000)) {
+  //     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到抓取位置");
+  //     return false;
+  //   } else {
+  //     RCLCPP_INFO(this->get_logger(), "机械臂已达到抓取位置");
 
+  //     // 关闭机械爪抓取目标
+  //     {
+  //       std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
+  //       gripper_state_ = 1.0f;
+  //     }
+
+  //     RCLCPP_INFO(this->get_logger(), "已关闭机械爪抓取目标");
+  //     return true;
+  //   }
+  // } else {
+  //   RCLCPP_ERROR(this->get_logger(), "移动到抓取位置失败");
+  //   return false;
+  // }
       // 关闭机械爪抓取目标
       {
         std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
         gripper_state_ = 1.0f;
       }
-
-      RCLCPP_INFO(this->get_logger(), "已关闭机械爪抓取目标");
-      return true;
-    }
-  } else {
-    RCLCPP_ERROR(this->get_logger(), "移动到抓取位置失败");
-    return false;
-  }
 }
 
 // 右侧地面抓取执行函数

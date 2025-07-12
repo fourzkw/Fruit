@@ -17,6 +17,7 @@
   <exec_depend>arm_control</exec_depend>
   <exec_depend>portable_serial_sender</exec_depend>
   <exec_depend>task_planner</exec_depend>
+  <exec_depend>navigation</exec_depend>
   
   <export>
     <build_type>ament_cmake</build_type>
