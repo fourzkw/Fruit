@@ -42,7 +42,7 @@ def generate_launch_description():
             'frame_id': camera_frame_id,
             'pixel_format': 'YUYV',
             'output_encoding': 'rgb8',
-            'image_size': [640, 480],
+            'image_size': [1280, 720],
             'camera_info_url': camera_info_url,
             'publish_rate': 30.0,
             # Exposure settings

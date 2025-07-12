@@ -90,7 +90,7 @@ private:
     std::condition_variable cv_;
 };
 
-// 数据接收线程函数 - 只负责读取串口数据并全部记录，不做任何处理
+// 数据接收线程函数
 void receiveThread(const std::shared_ptr<portable_serial_sender::SerialSender>& serial_sender, 
                   PacketQueue& packet_queue)
 {

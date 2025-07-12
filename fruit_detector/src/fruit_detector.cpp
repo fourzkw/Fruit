@@ -103,8 +103,8 @@ void FruitDetector::imageCallback(
 
     if (!detections.empty()) {
       auto target_detection = detections[0];
-      float target_x_offset = 640; // 更新为1280的一半
-      float target_y_offset = 480; // 更新为960的一半
+      float target_x_offset = 640; // 1280的一半
+      float target_y_offset = 360; // 720的一半
       int target_class_id = 0;
       bool target_found = false;
 
@@ -129,8 +129,8 @@ void FruitDetector::imageCallback(
         
         float center_x = (detection[1].x + detection[2].x) / 2;
         float center_y = (detection[1].y + detection[2].y) / 2;
-        float x_offset = 640 - center_x; // 更新为1280的一半
-        float y_offset = 480 - center_y; // 更新为960的一半
+        float x_offset = 640 - center_x; // 1280的一半
+        float y_offset = 360 - center_y; // 720的一半
 
         // 在图像上绘制中心点，目标类型用红色，其他用黄色
         cv::Scalar circle_color = is_target_class ? 
@@ -151,9 +151,9 @@ void FruitDetector::imageCallback(
       }
 
       // 绘制测试图像标识
-      cv::line(frame, cv::Point(640, 0), cv::Point(640, 960), // 垂直线通过中心点
+      cv::line(frame, cv::Point(640, 0), cv::Point(640, 720), // 垂直线通过中心点
                cv::Scalar(0, 255, 0), 1);
-      cv::line(frame, cv::Point(0, 480), cv::Point(1280, 480), // 水平线通过中心点
+      cv::line(frame, cv::Point(0, 360), cv::Point(1280, 360), // 水平线通过中心点
                cv::Scalar(0, 255, 0), 1);
       cv::putText(frame, "target_x_offset: " + std::to_string(target_x_offset),
                   cv::Point(20, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, // 增大字体

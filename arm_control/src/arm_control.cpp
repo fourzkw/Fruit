@@ -241,7 +241,6 @@ void ArmControlNode::servoPublishThreadFunc() {
     {
       std::lock_guard<std::mutex> lock(joint_positions_mutex_);
       if (latest_joint_positions_.empty()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
 
@@ -263,7 +262,7 @@ void ArmControlNode::servoPublishThreadFunc() {
     servo_angle_pub_->publish(servo_angles);
 
     // 按固定频率发布
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
   RCLCPP_INFO(this->get_logger(), "伺服角度发布线程结束");
@@ -277,7 +276,7 @@ void ArmControlNode::initializeMoveIt() {
             shared_from_this(), "group1");
 
     move_group_->setEndEffectorLink("end_1");
-    move_group_->setPlanningTime(2.0);
+    move_group_->setPlanningTime(1.0);
 
     // 在单独线程中初始化机器人状态
     std::thread([this]() {
@@ -307,7 +306,7 @@ void ArmControlNode::initializeMoveIt() {
   }
 }
 
-// 关节状态更新
+// 数字关节状态更新
 void ArmControlNode::jointStateCallback(
     const sensor_msgs::msg::JointState::SharedPtr msg) {
   std::lock_guard<std::mutex> lock(joint_positions_mutex_);
@@ -424,7 +423,7 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
     }
 
     // 计算调整量
-    float adjust_joint1_angle = current_x_offset * 0.002;
+    float adjust_joint1_angle = current_x_offset * 0.0003;
 
     // 获取当前关节值
     std::vector<double> joint_values;
@@ -446,7 +445,7 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
         move_group_->execute(joint_plan);
 
         // 判断真实机械臂状态是否运动到仿真机械臂位置
-        if (!waitForJointPositionConvergence(0.05, 3000)) {
+        if (!waitForJointPositionConvergence(0.5, 3000)) {
           RCLCPP_WARN(this->get_logger(),
                       "机械臂未能在指定时间内达到Joint1调整位置");
         } else {
@@ -469,7 +468,7 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
     }
 
     // 如果偏移足够小，退出循环
-    if (abs(current_y_offset) < 15) {
+    if (abs(current_y_offset) < 30) {
       RCLCPP_INFO(this->get_logger(), "Y轴调整完成");
       break;
     }
@@ -483,7 +482,7 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
 
     if (success) {
       // 判断真实机械臂状态是否运动到仿真机械臂位置
-      if (!waitForJointPositionConvergence(0.05, 3000)) {
+      if (!waitForJointPositionConvergence(0.5, 3000)) {
         RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
       } else {
         RCLCPP_INFO(this->get_logger(), "机械臂已达到目标位置");
@@ -500,27 +499,27 @@ bool ArmControlNode::handleLeftGroundGrabbing() {
   bool grab_success = moveEndEffectorCartesian(
       adjust_eff_xposition, adjust_eff_yposition, adjust_eff_zposition, 3000);
 
-  // if (grab_success) {
-  //   // 判断真实机械臂状态是否运动到仿真机械臂位置
-  //   if (!waitForJointPositionConvergence(0.05, 3000)) {
-  //     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到抓取位置");
-  //     return false;
-  //   } else {
-  //     RCLCPP_INFO(this->get_logger(), "机械臂已达到抓取位置");
+  if (grab_success) {
+    // 判断真实机械臂状态是否运动到仿真机械臂位置
+    if (!waitForJointPositionConvergence(0.5, 3000)) {
+      RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到抓取位置");
+      return false;
+    } else {
+      RCLCPP_INFO(this->get_logger(), "机械臂已达到抓取位置");
 
-  //     // 关闭机械爪抓取目标
-  //     {
-  //       std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
-  //       gripper_state_ = 1.0f;
-  //     }
+      // 关闭机械爪抓取目标
+      {
+        std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
+        gripper_state_ = 1.0f;
+      }
 
-  //     RCLCPP_INFO(this->get_logger(), "已关闭机械爪抓取目标");
-  //     return true;
-  //   }
-  // } else {
-  //   RCLCPP_ERROR(this->get_logger(), "移动到抓取位置失败");
-  //   return false;
-  // }
+      RCLCPP_INFO(this->get_logger(), "已关闭机械爪抓取目标");
+      return true;
+    }
+  } else {
+    RCLCPP_ERROR(this->get_logger(), "移动到抓取位置失败");
+    return false;
+  }
       // 关闭机械爪抓取目标
       {
         std::lock_guard<std::mutex> grip_lock(gripper_state_mutex_);
@@ -567,7 +566,7 @@ bool ArmControlNode::transitionToIdle() {
   move_group_->execute(plan);
 
   // 判断真实机械臂状态是否运动到仿真机械臂位置
-  if (!waitForJointPositionConvergence(0.05, 5000)) {
+  if (!waitForJointPositionConvergence(0.5, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到idle位置");
     return false; // 位置未收敛，返回失败
   } else {
@@ -592,7 +591,7 @@ bool ArmControlNode::transitionToLeftGroundGrabbing() {
   move_group_->execute(plan);
 
   // 判断真实机械臂状态是否运动到仿真机械臂位置
-  if (!waitForJointPositionConvergence(0.05, 5000)) {
+  if (!waitForJointPositionConvergence(0.5, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
     return false; // 位置未收敛，返回失败
   } else {
@@ -618,7 +617,7 @@ bool ArmControlNode::transitionToRightGroundGrabbing() {
   move_group_->execute(plan);
 
   // 判断真实机械臂状态是否运动到仿真机械臂位置
-  if (!waitForJointPositionConvergence(0.05, 5000)) {
+  if (!waitForJointPositionConvergence(0.5, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
     return false; // 位置未收敛，返回失败
   } else {
@@ -720,7 +719,7 @@ bool ArmControlNode::transitionToHarvesting() {
   move_group_->execute(plan);
 
   // 判断真实机械臂状态是否运动到仿真机械臂位置
-  if (!waitForJointPositionConvergence(0.05, 5000)) {
+  if (!waitForJointPositionConvergence(0.5, 5000)) {
     RCLCPP_WARN(this->get_logger(), "机械臂未能在指定时间内达到目标位置");
     return false; // 位置未收敛，返回失败
   } else {
@@ -778,14 +777,19 @@ bool ArmControlNode::waitForJointPositionConvergence(double max_error,
 
     // 检查两者差异是否在允许范围内
     bool converged = true;
+    const double RAD_TO_DEG = 57.2957795;  // 180.0/3.14159265358979323846，弧度转角度的转换因子
+    
     for (size_t i = 0; i < 4 && i < current_joint_positions.size(); ++i) {
-      double diff = std::abs(current_joint_positions[i] -
+      // 将弧度制转换为角度制再比较
+      double position_in_degrees = current_joint_positions[i] * RAD_TO_DEG;
+      double diff = std::abs(position_in_degrees - 
                              static_cast<double>(current_serial_data[i]));
       if (diff > max_error) {
         converged = false;
-        RCLCPP_DEBUG(this->get_logger(),
-                     "关节 %zu 未收敛: 理想值 %.4f, 实际值 %.4f, 差值 %.4f", i,
-                     current_joint_positions[i], current_serial_data[i], diff);
+        RCLCPP_WARN(this->get_logger(),
+                     "关节 %zu 未收敛: 理想值 %.4f度 (%.4f弧度), 实际值 %.4f度, 差值 %.4f度", i,
+                     position_in_degrees, current_joint_positions[i], 
+                     current_serial_data[i], diff);
         break;
       }
     }

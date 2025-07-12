@@ -64,7 +64,7 @@ bool SerialSender::connectToSerialPort()
 {
     try
     {
-        // 创建串口配置 - 使用正确的构造函数参数
+        // 创建串口配置
         serial_config_ = std::make_unique<drivers::serial_driver::SerialPortConfig>(
             baud_rate_,
             drivers::serial_driver::FlowControl::NONE,
@@ -72,7 +72,7 @@ bool SerialSender::connectToSerialPort()
             drivers::serial_driver::StopBits::ONE
         );
 
-        // 创建串口驱动 - 使用正确的构造函数
+        // 创建串口驱动
         serial_driver_ = std::make_unique<drivers::serial_driver::SerialDriver>(*io_context_);
         
         // 初始化和打开串口
